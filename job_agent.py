@@ -17,12 +17,11 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Multi-feed support (easily expandable)
+# Multi-feed support (UPDATED with 3 feeds)
 FEEDS = [
     "https://weworkremotely.com/categories/remote-front-end-programming.rss",
-    # Add more free RSS feeds here as needed:
-    # "https://remoteok.com/remote-design-jobs.rss",
-    # "https://remotive.com/remote-jobs/design/feed",
+    "https://remoteok.com/remote-design-jobs.rss",
+    "https://remotive.com/remote-jobs/design/feed"
 ]
 
 
