@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from google import genai
 from supabase import create_client
 
+# Environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TG_CHAT_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -22,7 +23,7 @@ FEEDS = [
     "https://hnrss.org/jobs"
 ]
 
-# This is the fix: Disguising the bot as a Chrome browser
+# Disguising the bot as a Chrome browser
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -32,9 +33,32 @@ def send_telegram(msg, reply_markup=None):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     if reply_markup: payload["reply_markup"] = reply_markup
     try:
-        requests.post(url, json=payload, timeout=15)
+        res = requests.post(url, json=payload, timeout=15).json()
+        if not res.get("ok"):
+            print(f"Telegram error: {res}")
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Telegram connection error: {e}")
+
+def mark_applied(jid=None, url=None):
+    try:
+        q = supabase.table("applications").select("id, status")
+        if jid: q = q.eq("id", jid)
+        elif url: q = q.eq("job_url", url)
+        else: return ("not_found", None)
+
+        cur = q.execute().data
+        if not cur: return ("not_found", None)
+        row = cur[0]
+        if row["status"] == "applied": return ("already_applied", row["id"])
+
+        supabase.table("applications").update({
+            "status": "applied",
+            "applied_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", row["id"]).execute()
+        return ("applied", row["id"])
+    except Exception as e:
+        print(f"Error in mark_applied: {e}")
+        return ("error", None)
 
 def scan_jobs():
     print("--- SCANNING JOBS ---")
@@ -45,7 +69,7 @@ def scan_jobs():
             print(f"Found {len(feed.entries)} entries.")
             if not feed.entries: continue
 
-            for entry in feed.entries[:5]: 
+            for entry in feed.entries[:3]: # Checking top 3 per feed to save API limits
                 job_link = getattr(entry, 'link', None)
                 job_title = getattr(entry, 'title', None) or 'Untitled Job'
                 job_summary = getattr(entry, 'summary', None) or ''
@@ -63,8 +87,13 @@ def scan_jobs():
                 prompt = f"Analyze this job:\nTitle: {job_title}\nDescription: {job_summary}\nTarget roles: graphic design, website design, social media manager, content specialist, or frontend. If it matches, output a summary and pitch angle. If not, output 'SKIP'."
 
                 try:
-                    response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                    # UPDATED TO gemini-3.8-flash based on your error log
+                    response = client.models.generate_content(
+                        model='gemini-3.8-flash', 
+                        contents=prompt
+                    )
                     result_text = (response.text or "").strip()
+                    print(f"-> Gemini says: {result_text[:50]}...")
                 except Exception as e:
                     print(f"Gemini error: {e}")
                     continue
@@ -87,6 +116,7 @@ def scan_jobs():
             print(f"Feed error: {e}")
 
 def handle_telegram_updates():
+    print("--- CHECKING TELEGRAM ---")
     try:
         state = supabase.table("bot_state").select("value").eq("key", "tg_offset").execute()
         offset = int(state.data[0]["value"]) if state.data else 0
