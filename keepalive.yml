@@ -1,0 +1,22 @@
+name: Keep Repo Alive
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Runs at midnight on the 1st of every month
+  workflow_dispatch: # Allows you to test it manually
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Make an empty commit
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git commit --allow-empty -m "chore: automated keepalive (prevents 60-day sleep)"
+          git push
