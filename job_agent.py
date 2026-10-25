@@ -23,7 +23,6 @@ FEEDS = [
     "https://hnrss.org/jobs"
 ]
 
-# Disguising the bot as a Chrome browser
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -69,7 +68,8 @@ def scan_jobs():
             print(f"Found {len(feed.entries)} entries.")
             if not feed.entries: continue
 
-            for entry in feed.entries[:3]: # Checking top 3 per feed to save API limits
+            # CHANGED to [:1] to check only the newest job per feed to save time
+            for entry in feed.entries[:1]: 
                 job_link = getattr(entry, 'link', None)
                 job_title = getattr(entry, 'title', None) or 'Untitled Job'
                 job_summary = getattr(entry, 'summary', None) or ''
@@ -84,10 +84,21 @@ def scan_jobs():
                 print("-> Pausing 6s for Gemini...")
                 time.sleep(6)
 
-                prompt = f"Analyze this job:\nTitle: {job_title}\nDescription: {job_summary}\nTarget roles: graphic design, website design, social media manager, content specialist, or frontend. If it matches, output a summary and pitch angle. If not, output 'SKIP'."
+                # UPDATED PROMPT: Stricting location filtering
+                prompt = f"""
+                Analyze this job listing:
+                Title: {job_title}
+                Description: {job_summary}
+
+                Target roles: graphic design, website design, social media manager, content specialist, or frontend work.
+                
+                CRITICAL RULE: If the job explicitly requires US residency, US work authorization, or is restricted to a specific region (e.g., US Only, UK Only, EU Only) and is NOT open to worldwide/global applicants (like Nigeria), you MUST output exactly 'SKIP'. 
+                
+                If it matches the roles AND is open to worldwide/global remote applicants (or specifically Africa/Nigeria), output a short summary explaining why it's a good match and a suggested pitch angle. 
+                If it does not match, output exactly 'SKIP'.
+                """
 
                 try:
-                    # UPDATED TO gemini-3.8-flash based on your error log
                     response = client.models.generate_content(
                         model='gemini-3.8-flash', 
                         contents=prompt
@@ -99,7 +110,7 @@ def scan_jobs():
                     continue
 
                 if result_text.upper().startswith("SKIP"):
-                    print("-> Skipped.")
+                    print("-> Skipped (Location mismatch or role mismatch).")
                     supabase.table("applications").insert({"job_url": job_link, "title": job_title, "status": "skipped"}).execute()
                     continue
 
