@@ -32,32 +32,9 @@ def send_telegram(msg, reply_markup=None):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     if reply_markup: payload["reply_markup"] = reply_markup
     try:
-        res = requests.post(url, json=payload, timeout=15).json()
-        if not res.get("ok"):
-            print(f"Telegram error: {res}")
+        requests.post(url, json=payload, timeout=15)
     except Exception as e:
-        print(f"Telegram connection error: {e}")
-
-def mark_applied(jid=None, url=None):
-    try:
-        q = supabase.table("applications").select("id, status")
-        if jid: q = q.eq("id", jid)
-        elif url: q = q.eq("job_url", url)
-        else: return ("not_found", None)
-
-        cur = q.execute().data
-        if not cur: return ("not_found", None)
-        row = cur[0]
-        if row["status"] == "applied": return ("already_applied", row["id"])
-
-        supabase.table("applications").update({
-            "status": "applied",
-            "applied_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", row["id"]).execute()
-        return ("applied", row["id"])
-    except Exception as e:
-        print(f"Error in mark_applied: {e}")
-        return ("error", None)
+        print(f"Telegram error: {e}")
 
 def scan_jobs():
     print("--- SCANNING JOBS ---")
@@ -68,7 +45,6 @@ def scan_jobs():
             print(f"Found {len(feed.entries)} entries.")
             if not feed.entries: continue
 
-            # CHANGED to [:1] to check only the newest job per feed to save time
             for entry in feed.entries[:1]: 
                 job_link = getattr(entry, 'link', None)
                 job_title = getattr(entry, 'title', None) or 'Untitled Job'
@@ -84,7 +60,6 @@ def scan_jobs():
                 print("-> Pausing 6s for Gemini...")
                 time.sleep(6)
 
-                # UPDATED PROMPT: Stricting location filtering
                 prompt = f"""
                 Analyze this job listing:
                 Title: {job_title}
@@ -99,10 +74,7 @@ def scan_jobs():
                 """
 
                 try:
-                    response = client.models.generate_content(
-                        model='gemini-3.8-flash', 
-                        contents=prompt
-                    )
+                    response = client.models.generate_content(model='gemini-3.8-flash', contents=prompt)
                     result_text = (response.text or "").strip()
                     print(f"-> Gemini says: {result_text[:50]}...")
                 except Exception as e:
@@ -110,7 +82,7 @@ def scan_jobs():
                     continue
 
                 if result_text.upper().startswith("SKIP"):
-                    print("-> Skipped (Location mismatch or role mismatch).")
+                    print("-> Skipped.")
                     supabase.table("applications").insert({"job_url": job_link, "title": job_title, "status": "skipped"}).execute()
                     continue
 
@@ -141,14 +113,26 @@ def handle_telegram_updates():
         max_id = max(u["update_id"] for u in updates)
 
         for update in updates:
+            # 1. HANDLE BUTTON CLICKS
             if "callback_query" in update:
                 cq = update["callback_query"]
                 data = cq.get("data", "")
+                
                 if data.startswith("applied:"):
                     jid = data.split(":", 1)[1]
                     supabase.table("applications").update({"status": "applied", "applied_at": datetime.now(timezone.utc).isoformat()}).eq("id", jid).execute()
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": "Logged ✓"}, timeout=10)
+                    # Send the popup confirmation
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": "Logged ✓ Applied successfully!"}, timeout=10)
+                    send_telegram(f"✅ Application logged in database!")
 
+                elif data.startswith("closed:"):
+                    jid = data.split(":", 1)[1]
+                    supabase.table("applications").update({"status": "closed"}).eq("id", jid).execute()
+                    # Send the popup confirmation
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": "Thread closed 🔒"}, timeout=10)
+                    send_telegram(f"🔒 Job thread closed in database!")
+
+            # 2. HANDLE TEXT MESSAGES
             message = update.get("message", {})
             text = message.get("text", "")
             chat_id = str(message.get("chat", {}).get("id", ""))
